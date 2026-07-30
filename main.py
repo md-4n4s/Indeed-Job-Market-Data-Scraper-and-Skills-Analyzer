@@ -1,6 +1,6 @@
 import asyncio
 import random
-import requests
+import aiohttp
 
 BASE_URL = "https://pk.indeed.com/jobs"
 
@@ -25,16 +25,54 @@ class IndeedScrapper:
 
     def __init__(self, j, l):
         self.semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
-        self.session = requests.Session()
+        self.session = aiohttp.ClientSession(
+            headers = get_headers(),
+        )
         self.data = {"q": j, "l": l}
-        self.headers = get_headers()
 
-    def search(self):
-        return self.session.get(
-            BASE_URL,
-            params=self.data,
-            headers=self.headers
-        ).url
+    async def search(self):
+        async with self.session.get(BASE_URL, params= self.data) as response:
+            return str(response.url)
+
+
+    async def fetch(self, url):
+
+        async with self.semaphore:
+            for attempt in range(MAX_RETRIES):
+                try:
+                    await asyncio.sleep(random.uniform(MIN_DELAY, MAX_DELAY))
+
+                    async with self.session.get(
+                            url,
+                            headers=self.headers,
+                            timeout=aiohttp.ClientTimeout(
+                                total=15
+                            )
+                    ) as response:
+                        if response.status == 429:
+                            retry_after = response.headers.get("Retry-After")
+
+                            if retry_after:
+                                wait = int(retry_after)
+                            else:
+                                wait = 2 ** attempt
+
+                            await asyncio.sleep(wait)
+
+                            continue
+
+                        if response.status == 403:
+                            return None
+
+                        response.raise_for_status()
+
+                        return await response.text()
+
+                except Exception:
+                    await asyncio.sleep(2 ** attempt)
+
+            return None
+
 
 if __name__ == "__main__":
 
