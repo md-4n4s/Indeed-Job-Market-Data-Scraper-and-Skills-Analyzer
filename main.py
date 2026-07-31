@@ -3,6 +3,7 @@ import random
 import aiohttp
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
+from urllib.parse import urljoin
 
 BASE_URL = "https://pk.indeed.com/jobs"
 
@@ -78,7 +79,8 @@ class IndeedScrapper:
 
             return None
 
-    async def parse_jobs(self, html):
+    @staticmethod
+    async def parse_jobs(html):
         soup = BeautifulSoup(html, "html.parser")
         data = []
 
@@ -91,10 +93,28 @@ class IndeedScrapper:
 
             data.append(d)
 
-        print(data[0])
         return data
 
+    @staticmethod
+    def find_urls(html):
+        soup = BeautifulSoup(html, "html.parser")
+        urls = []
+        for i in range(2,6):
+            url = soup.find("a", {"aria-label": str(i), "data-testid": f"pagination-page-{i}"})
+            if url:
+                urls.append(urljoin(BASE_URL,url["href"]))
+            else:
+                print(f"No url for Page {i}")
 
+        return list(set(urls))
+
+    async def scrape_jobs(self, url):
+        html = await self.fetch(url)
+        if html is None:
+            print(f"No html for {url}")
+        jobs = await IndeedScrapper.parse_jobs(html)
+
+        return jobs
 
 
 async def main():
@@ -104,9 +124,21 @@ async def main():
     scraper = IndeedScrapper(job, location)
     await scraper.start()
     try:
-        url = await scraper.search()
-        html = await scraper.fetch(url)
-        await scraper.parse_jobs(html)
+        first_url = await scraper.search()
+        html = await scraper.fetch(first_url)
+        if html is None:
+            print("No html found at all.")
+        urls = scraper.find_urls(html)
+        urls.insert(0, first_url)
+
+        tasks = [
+            scraper.scrape_jobs(url) for url in urls
+        ]
+
+        results = await asyncio.gather(*tasks)
+
+        print(results)
+        return results
 
     except Exception as e:
         print("Error:", e)
