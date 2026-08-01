@@ -23,18 +23,24 @@ HEADERS = {
     "Upgrade-Insecure-Requests": "1",
 }
 
-class IndeedScrapper:
+class IndeedScraper:
 
     def __init__(self, j, l):
         self.semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
         self.session = None
         self.data = {"q": j, "l": l}
+        self.playwright = None
+        self.browser = None
 
 
     async def start(self):
         self.session = aiohttp.ClientSession(headers=HEADERS)
+        self.playwright = await async_playwright().start()
+        self.browser = await self.playwright.chromium.launch(headless=False)
 
     async def close(self):
+        await self.browser.close()
+        await self.playwright.stop()
         await self.session.close()
 
     async def search(self):
@@ -49,38 +55,38 @@ class IndeedScrapper:
         async with self.semaphore:
             for attempt in range(MAX_RETRIES):
 
-                async with async_playwright() as p:
-                    browser = await p.chromium.launch(headless=False)
-                    page = await browser.new_page()
+                page = await self.browser.new_page()
 
-                    try:
-                        await asyncio.sleep(random.uniform(MIN_DELAY, MAX_DELAY))
+                try:
+                    await asyncio.sleep(random.uniform(MIN_DELAY, MAX_DELAY))
 
-                        response = await page.goto(url)
-                        await page.wait_for_load_state("networkidle")
+                    response = await page.goto(url)
+                    await page.wait_for_load_state("networkidle")
 
-                        if response and response.status == 429:
-                            await asyncio.sleep(2 ** attempt)
-                            continue
-
-                        if response and response.status == 403:
-                            print("Blocked:", url)
-                            return None
-
-                        html = await page.content()
-                        await browser.close()
-
-                        if "Too Many Requests" not in html:
-                            return html
-
-                    except Exception as e:
-                        print(e)
+                    if response and response.status == 429:
                         await asyncio.sleep(2 ** attempt)
+                        continue
+
+                    if response and response.status == 403:
+                        print("Blocked:", url)
+                        return None
+
+                    html = await page.content()
+
+                    if "Too Many Requests" not in html:
+                        return html
+
+                except Exception as e:
+                    print(e)
+                    await asyncio.sleep(2 ** attempt)
+
+                finally:
+                    await page.close()
 
             return None
 
     @staticmethod
-    async def parse_jobs(html):
+    def parse_jobs(html):
         soup = BeautifulSoup(html, "html.parser")
         data = []
 
@@ -112,7 +118,8 @@ class IndeedScrapper:
         html = await self.fetch(url)
         if html is None:
             print(f"No html for {url}")
-        jobs = await IndeedScrapper.parse_jobs(html)
+            return []
+        jobs = IndeedScraper.parse_jobs(html)
 
         return jobs
 
@@ -121,7 +128,7 @@ async def main():
     job = input("Write job title, keywords, or company:")
     location = input("Write location (City, state, zip code, or \"remote\":")
 
-    scraper = IndeedScrapper(job, location)
+    scraper = IndeedScraper(job, location)
     await scraper.start()
     try:
         first_url = await scraper.search()
