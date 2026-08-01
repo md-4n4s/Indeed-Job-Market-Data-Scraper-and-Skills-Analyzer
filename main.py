@@ -4,6 +4,7 @@ import aiohttp
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
 from urllib.parse import urljoin
+import csv
 
 BASE_URL = "https://pk.indeed.com/jobs"
 
@@ -61,7 +62,7 @@ class IndeedScraper:
                     await asyncio.sleep(random.uniform(MIN_DELAY, MAX_DELAY))
 
                     response = await page.goto(url)
-                    await page.wait_for_load_state("networkidle")
+                    await asyncio.sleep(random.uniform(MIN_DELAY, MAX_DELAY))
 
                     if response and response.status == 429:
                         await asyncio.sleep(2 ** attempt)
@@ -144,7 +145,6 @@ async def main():
 
         results = await asyncio.gather(*tasks)
 
-        print(results)
         return results
 
     except Exception as e:
@@ -154,4 +154,11 @@ async def main():
         await scraper.close()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    scrapingResults = asyncio.run(main())
+    with open("results.csv", "w") as csvfile:
+        writer = csv.writer(csvfile)
+        writer.writerow(["Job Title", "Company", "Location"])
+
+        for result in scrapingResults:
+            for job in result:
+                writer.writerow([job["title"], job["company"], job["location"]])
