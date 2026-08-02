@@ -6,6 +6,7 @@ from playwright.async_api import async_playwright
 from urllib.parse import urljoin
 import csv
 
+# constants
 BASE_URL = "https://pk.indeed.com/jobs"
 
 MAX_CONCURRENT_REQUESTS = 3
@@ -15,6 +16,7 @@ MAX_DELAY = 3
 
 MAX_RETRIES = 3
 
+# HTTP headers to mimic a real browser request and reduce the chance of being blocked
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -27,23 +29,25 @@ HEADERS = {
 class IndeedScraper:
 
     def __init__(self, j, l):
-        self.semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
+        self.semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS) # Limit the concurrent requests
         self.session = None
         self.data = {"q": j, "l": l}
         self.playwright = None
         self.browser = None
 
-
+    # To start the session, and launch the browser
     async def start(self):
         self.session = aiohttp.ClientSession(headers=HEADERS)
         self.playwright = await async_playwright().start()
         self.browser = await self.playwright.chromium.launch(headless=False)
 
+    # To close the session, and close the browser
     async def close(self):
         await self.browser.close()
         await self.playwright.stop()
         await self.session.close()
 
+    # To send a GET request with the search parameters and return the final URL
     async def search(self):
         async with self.session.get(BASE_URL, params= self.data) as response:
             return str(response.url)
@@ -54,8 +58,10 @@ class IndeedScraper:
         print("Fetching", url)
 
         async with self.semaphore:
+            # Attempts in case of failures
             for attempt in range(MAX_RETRIES):
 
+                # Create a new page
                 page = await self.browser.new_page()
 
                 try:
@@ -64,10 +70,12 @@ class IndeedScraper:
                     response = await page.goto(url)
                     await asyncio.sleep(random.uniform(MIN_DELAY, MAX_DELAY))
 
+                    # If server response with "Too Many Requests"
                     if response and response.status == 429:
                         await asyncio.sleep(2 ** attempt)
                         continue
 
+                    # If server blocks the request
                     if response and response.status == 403:
                         print("Blocked:", url)
                         return None
@@ -126,17 +134,23 @@ class IndeedScraper:
 
 
 async def main():
+    # Take input from user from console
     job = input("Write job title, keywords, or company:")
     location = input("Write location (City, state, zip code, or \"remote\":")
 
     scraper = IndeedScraper(job, location)
     await scraper.start()
     try:
+        # Get the first page after searching 
         first_url = await scraper.search()
         html = await scraper.fetch(first_url)
         if html is None:
             print("No html found at all.")
+
+        # Find next pages' urls
         urls = scraper.find_urls(html)
+
+        # Place all urls at one place
         urls.insert(0, first_url)
 
         tasks = [
@@ -155,6 +169,7 @@ async def main():
 
 if __name__ == "__main__":
     scrapingResults = asyncio.run(main())
+    # Extract result to csv
     with open("results.csv", "w") as csvfile:
         writer = csv.writer(csvfile)
         writer.writerow(["Job Title", "Company", "Location"])
